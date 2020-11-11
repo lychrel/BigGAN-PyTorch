@@ -11,7 +11,7 @@ from torch.nn import Parameter as P
 
 import layers
 from sync_batchnorm import SynchronizedBatchNorm2d as SyncBatchNorm2d
-
+from lamb import Lamb#, log_lamb_rs
 
 # Architectures for G
 # Attention is passed in in the format '32_64' to mean applying an attention
@@ -49,6 +49,21 @@ def G_arch(ch=64, attention='64', ksize='333333', dilation='111111'):
                'attention' : {2**i: (2**i in [int(item) for item in attention.split('_')])
                               for i in range(3,6)}}
 
+  # DEBUG: jack added print
+  print("\n\nATTENTION:")
+  for configDict in arch.values():
+      print(configDict['attention'])
+  print("\n\n")
+
+  # check if ANY attention layers will be added
+  numAttn = 0
+  for resArch in arch.values():
+      for index in range(len(resArch['out_channels'])):
+          if resArch['attention'][resArch['resolution'][index]]:
+              numAttn += 1
+
+  print("\n\nADDING {} ATTN LAYERS TOTAL".format(numAttn))
+
   return arch
 
 class Generator(nn.Module):
@@ -61,7 +76,7 @@ class Generator(nn.Module):
                G_lr=5e-5, G_B1=0.0, G_B2=0.999, adam_eps=1e-8,
                BN_eps=1e-5, SN_eps=1e-12, G_mixed_precision=False, G_fp16=False,
                G_init='ortho', skip_init=False, no_optim=False,
-               G_param='SN', norm_style='bn',
+               G_param='SN', norm_style='bn', lamb=False,
                **kwargs):
     super(Generator, self).__init__()
     # Channel width mulitplier
@@ -116,6 +131,7 @@ class Generator(nn.Module):
       self.num_slots = 1
       self.z_chunk_size = 0
 
+    #print("G PARAM: {}".format(self.G_param))
     # Which convs, batchnorms, and linear layers to use
     if self.G_param == 'SN':
       self.which_conv = functools.partial(layers.SNConv2d,
@@ -185,6 +201,9 @@ class Generator(nn.Module):
     if not skip_init:
       self.init_weights()
 
+    # DEBUG / TODO: remove
+    print("LAMB: {}".format(lamb))
+
     # Set up optimizer
     # If this is an EMA copy, no need for an optim, so just return now
     if no_optim:
@@ -196,6 +215,8 @@ class Generator(nn.Module):
       self.optim = utils.Adam16(params=self.parameters(), lr=self.lr,
                            betas=(self.B1, self.B2), weight_decay=0,
                            eps=self.adam_eps)
+    elif lamb:
+        self.optim = Lamb(self.parameters(), lr=self.lr, weight_decay=0, betas=(self.B1, self.B2), eps=self.adam_eps, adam=False)
     else:
       self.optim = optim.Adam(params=self.parameters(), lr=self.lr,
                            betas=(self.B1, self.B2), weight_decay=0,
@@ -316,6 +337,7 @@ class Discriminator(nn.Module):
 
     # Which convs, batchnorms, and linear layers to use
     # No option to turn off SN in D right now
+    # DEBUG: jack added this option in
     if self.D_param == 'SN':
       self.which_conv = functools.partial(layers.SNConv2d,
                           kernel_size=3, padding=1,
@@ -327,6 +349,11 @@ class Discriminator(nn.Module):
       self.which_embedding = functools.partial(layers.SNEmbedding,
                               num_svs=num_D_SVs, num_itrs=num_D_SV_itrs,
                               eps=self.SN_eps)
+    """ Below doesn't work bc embedding layer is necessary atm
+    else:
+      self.which_conv = functools.partial(nn.Conv2d, kernel_size=3, padding=1)
+      self.which_linear = nn.Linear
+    """
     # Prepare model
     # self.blocks is a doubly-nested list of modules, the outer loop intended
     # to be over blocks at a given resolution (resblocks and/or self-attention)

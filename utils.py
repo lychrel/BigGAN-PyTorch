@@ -359,6 +359,10 @@ def prepare_parser():
     '--sv_log_interval', type=int, default=10,
     help='Iteration interval for logging singular values '
          ' (default: %(default)s)') 
+  # LAMB toggle
+  parser.add_argument(
+    '--lamb', action='store_true', default=False,
+    help='LAMB optimizer (in place of Adam -- not compatible w/ mixed precision)')
    
   return parser
 
